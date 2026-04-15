@@ -48,6 +48,100 @@ jobs:
 
           echo "previous_version=$previous_version" >> "$GITHUB_OUTPUT"
 
+      - name: Get Title Editor token
+        if: steps.latest.outputs.latest_version != steps.previous.outputs.previous_version
+        id: token
+        shell: bash
+        run: |
+          token=$(curl -fs --request POST \
+            --url "${{ secrets.TITLE_EDITOR_URL }}/auth/token" \
+            --header "Content-Type: application/json" \
+            --data "{
+              \"username\": \"${{ secrets.TITLE_EDITOR_USERNAME }}\",
+              \"password\": \"${{ secrets.TITLE_EDITOR_PASSWORD }}\"
+            }" | jq -r '.token')
+
+          if [[ -z "$token" || "$token" == "null" ]]; then
+            echo "Failed to get Title Editor token" >&2
+            exit 1
+          fi
+
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Create patch in Title Editor
+        if: steps.latest.outputs.latest_version != steps.previous.outputs.previous_version
+        shell: bash
+        run: |
+          today=$(date -u +"%Y-%m-%dT00:00:00.000Z")
+
+          curl -fs --request POST \
+            --url "${{ secrets.TITLE_EDITOR_URL }}/v2/softwaretitles/${{ secrets.VXT_TITLE_ID }}/patches" \
+            --header "Authorization: Bearer ${{ steps.token.outputs.token }}" \
+            --header "Content-Type: application/json" \
+            --data "{
+              \"absoluteOrderId\": 0,
+              \"enabled\": true,
+              \"version\": \"${{ steps.latest.outputs.latest_version }}\",
+              \"releaseDate\": \"$today\",
+              \"standalone\": true,
+              \"minimumOperatingSystem\": \"10.12\",
+              \"reboot\": false,
+              \"killApps\": {
+                \"bundleId\": \"${{ secrets.VXT_BUNDLE_ID }}\",
+                \"appName\": \"Vxt Desktop.app\"
+              },
+              \"components\": {
+                \"name\": \"Vxt Desktop\",
+                \"version\": \"${{ steps.latest.outputs.latest_version }}\",
+                \"criteria\": {
+                  \"absoluteOrderId\": 0,
+                  \"and\": true,
+                  \"name\": \"Application Bundle ID\",
+                  \"operator\": \"is\",
+                  \"value\": \"${{ secrets.VXT_BUNDLE_ID }}\",
+                  \"type\": \"recon\"
+                }
+              },
+              \"capabilities\": {
+                \"absoluteOrderId\": 0,
+                \"and\": true,
+                \"name\": \"Application Bundle ID\",
+                \"operator\": \"is\",
+                \"value\": \"10.12\",
+                \"type\": \"recon\"
+              }
+            }"
+
+      - name: Get current software title
+        if: steps.latest.outputs.latest_version != steps.previous.outputs.previous_version
+        shell: bash
+        run: |
+          curl -fs --request GET \
+            --url "${{ secrets.TITLE_EDITOR_URL }}/v2/softwaretitles/${{ secrets.VXT_TITLE_ID }}" \
+            --header "Authorization: Bearer ${{ steps.token.outputs.token }}" \
+            --header "Content-Type: application/json" \
+            > current_title.json
+
+      - name: Update current version in Title Editor
+        if: steps.latest.outputs.latest_version != steps.previous.outputs.previous_version
+        shell: bash
+        run: |
+          jq '
+            if has("currentVersion") then
+              .currentVersion = "${{ steps.latest.outputs.latest_version }}"
+            elif has("version") then
+              .version = "${{ steps.latest.outputs.latest_version }}"
+            else
+              .
+            end
+          ' current_title.json > updated_title.json
+
+          curl -fs --request PUT \
+            --url "${{ secrets.TITLE_EDITOR_URL }}/v2/softwaretitles/${{ secrets.VXT_TITLE_ID }}" \
+            --header "Authorization: Bearer ${{ steps.token.outputs.token }}" \
+            --header "Content-Type: application/json" \
+            --data @updated_title.json
+
       - name: Update saved version
         if: steps.latest.outputs.latest_version != steps.previous.outputs.previous_version
         shell: bash

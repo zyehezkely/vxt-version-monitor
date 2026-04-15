@@ -1,0 +1,75 @@
+name: Check VXT Version
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Find latest VXT version
+        id: latest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          latest_version=$(curl -fs "https://storage.googleapis.com/vxt-app-desktop-versions?prefix=&delimiter=/" \
+            | grep -oE '<Prefix>[0-9.]+/</Prefix>' \
+            | sed -E 's#</?Prefix>##g; s#/$##' \
+            | sort -V \
+            | tail -1)
+
+          if [[ -z "$latest_version" ]]; then
+            echo "Could not determine latest version" >&2
+            exit 1
+          fi
+
+          echo "latest_version=$latest_version" >> "$GITHUB_OUTPUT"
+
+      - name: Read previous version
+        id: previous
+        shell: bash
+        run: |
+          if [[ -f latest_version.txt ]]; then
+            previous_version=$(tr -d '\r\n' < latest_version.txt)
+          else
+            previous_version=""
+          fi
+
+          echo "previous_version=$previous_version" >> "$GITHUB_OUTPUT"
+
+      - name: Update saved version
+        if: steps.latest.outputs.latest_version != steps.previous.outputs.previous_version
+        shell: bash
+        run: |
+          echo "${{ steps.latest.outputs.latest_version }}" > latest_version.txt
+
+      - name: Commit updated version file
+        if: steps.latest.outputs.latest_version != steps.previous.outputs.previous_version
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add latest_version.txt
+          git commit -m "Update VXT version to ${{ steps.latest.outputs.latest_version }}"
+          git push
+
+      - name: Create issue for new version
+        if: steps.latest.outputs.latest_version != steps.previous.outputs.previous_version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh issue create \
+            --title "New VXT version detected: ${{ steps.latest.outputs.latest_version }}" \
+            --body $'A new VXT Desktop version was detected.\n\nPrevious version: ${{ steps.previous.outputs.previous_version }}\nNew version: ${{ steps.latest.outputs.latest_version }}\n\nDownload URL:\nhttps://storage.googleapis.com/vxt-app-desktop-versions/${{ steps.latest.outputs.latest_version }}/macUniversalDmg/Vxt%20Desktop-${{ steps.latest.outputs.latest_version }}-universal.dmg'
